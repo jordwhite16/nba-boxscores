@@ -1,0 +1,49 @@
+name: NBA box scores
+
+# Runs after the last west-coast game has finished. 09:15 UTC is about 05:15 in
+# New York and 02:15 in Los Angeles, which clears even a late overrunning game.
+# The second run is a safety net: if the feed had not published a box score on
+# the first pass, the retry picks it up without anyone touching it.
+on:
+  schedule:
+    - cron: '15 9 * * *'
+    - cron: '15 15 * * *'
+  workflow_dispatch:        # lets you run it by hand from the Actions tab
+
+permissions:
+  contents: write           # needed so the job can commit the data back
+
+concurrency:
+  group: nba-scrape
+  cancel-in-progress: false
+
+jobs:
+  scrape:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: pip install --quiet pandas pyarrow
+
+      - name: Scrape box scores
+        run: python scrape_nba.py
+
+      - name: Commit any new data
+        if: always()        # commit what validated even if a later game failed
+        run: |
+          git config user.name  "nba-scraper"
+          git config user.email "actions@github.com"
+          if [ -n "$(git status --porcelain data)" ]; then
+            git add data
+            git commit -m "box scores: $(date -u +%Y-%m-%d)"
+            # another run may have pushed between our checkout and now
+            git pull --rebase --autostash origin "${GITHUB_REF_NAME}" || true
+            git push
+          else
+            echo "nothing new to commit"
+          fi
