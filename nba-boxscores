@@ -1,0 +1,58 @@
+name: NBA box scores
+
+# Runs after the last west-coast game has finished. 09:15 UTC is about 05:15 in
+# New York and 02:15 in Los Angeles, which clears even a late overrunning game.
+# The second run is a safety net: if the feed had not published a box score on
+# the first pass, the retry picks it up without anyone touching it.
+on:
+  schedule:
+    - cron: '15 9 * * *'
+    - cron: '15 15 * * *'
+  workflow_dispatch:
+    inputs:
+      since:
+        description: 'Backfill from this date (YYYY-MM-DD). Blank for the normal nightly run.'
+        required: false
+        default: ''
+      probe:
+        description: 'Only report which feeds are reachable, scrape nothing.'
+        type: boolean
+        required: false
+        default: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: nba-scrape
+  cancel-in-progress: false
+
+jobs:
+  scrape:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: pip install --quiet pandas pyarrow
+
+      - name: Scrape box scores
+        run: |
+          if [ "${{ inputs.probe }}" = "true" ]; then
+            python scrape_nba.py --probe
+          elif [ -n "${{ inputs.since }}" ]; then
+            python scrape_nba.py --since "${{ inputs.since }}"
+          else
+            python scrape_nba.py
+          fi
+
+      # The commit logic lives in push_data.py, not here. It used to be a
+      # thirty-line bash block in this step and editing that on a phone
+      # truncated it twice. One line is harder to break.
+      - name: Commit any new data
+        if: always()
+        run: python push_data.py
